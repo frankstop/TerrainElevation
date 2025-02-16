@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Interactive Terrain Elevation Map</title>
+  <title>Interactive Terrain Elevation Map with Particles</title>
   <style>
     body { margin: 0; overflow: hidden; }
     /* Legend for the color scale */
@@ -40,6 +40,7 @@
 
   <!-- Import Three.js, OrbitControls, and Cannon‑ES via CDN -->
   <script type="module">
+    // Import modules from CDN
     import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
     import { OrbitControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js';
     import * as CANNON from 'https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js';
@@ -48,20 +49,20 @@
      * PARAMETERS & CONFIG *
      ***********************/
     const params = {
-      // Number of particles (try adjusting for performance)
+      // Total number of particles
       particleCount: 1000,
       // Radius of each particle (spherical)
       particleSize: 0.2,
-      // Dimensions of the terrain (particles spread over this x–z area)
+      // Terrain area dimensions (particles spread over this x–z area)
       terrainWidth: 20,
       terrainDepth: 20,
-      // Scale of the height variation of the terrain
+      // Scale factor for height variations in the terrain function
       heightScale: 5,
       // Physics simulation time step
       physicsTimeStep: 1 / 60,
-      // Gravity along the vertical axis (using Y as up for Cannon‑ES)
+      // Gravity along Y axis (set to 0 for debugging)
       gravity: -9.82,
-      // Half–size of the containing box (box goes from –boxSize to +boxSize on all axes)
+      // Half–size of the containing box (the box spans -boxSize to +boxSize in each axis)
       boxSize: 25
     };
 
@@ -69,24 +70,28 @@
      * THREE.JS SETUP   *
      ********************/
     const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x222222);
+
+    // Set up camera with a perspective view.
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
     camera.position.set(30, 30, 30);
     camera.lookAt(scene.position);
 
+    // Create renderer and add it to the DOM.
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // Orbit controls allow the user to rotate/zoom the scene
+    // Add orbit controls for interactivity.
     const controls = new OrbitControls(camera, renderer.domElement);
 
-    // Basic lighting
+    // Basic ambient and directional lighting.
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
     directionalLight.position.set(10, 20, 10);
     scene.add(directionalLight);
 
-    // Create a wireframe box to visualize the containment area
+    // Create a wireframe box to represent the containment area.
     const boxGeometry = new THREE.BoxGeometry(params.boxSize*2, params.boxSize*2, params.boxSize*2);
     const boxEdges = new THREE.EdgesGeometry(boxGeometry);
     const boxMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
@@ -97,87 +102,42 @@
      * CANNON‑ES PHYSICS   *
      ***********************/
     const world = new CANNON.World();
-    // Using Y as the vertical axis (consistent with Cannon‑ES)
+    // Set gravity along Y axis.
     world.gravity.set(0, params.gravity, 0);
     world.broadphase = new CANNON.NaiveBroadphase();
     world.solver.iterations = 10;
 
-    // Create static planes to form the walls of the box.
-    // Each wall is a plane with zero mass.
-    const boxSize = params.boxSize;
-    const walls = [];
+    // Helper function to create a static wall.
+    function createWall(eulerX, eulerY, eulerZ, posX, posY, posZ) {
+      const shape = new CANNON.Plane();
+      const body = new CANNON.Body({ mass: 0 });
+      body.addShape(shape);
+      body.quaternion.setFromEuler(eulerX, eulerY, eulerZ);
+      body.position.set(posX, posY, posZ);
+      world.addBody(body);
+    }
 
-    // Floor (y = –boxSize)
-    {
-      const shape = new CANNON.Plane();
-      const body = new CANNON.Body({ mass: 0 });
-      body.addShape(shape);
-      body.quaternion.setFromEuler(-Math.PI/2, 0, 0);
-      body.position.set(0, -boxSize, 0);
-      world.addBody(body);
-      walls.push(body);
-    }
-    // Ceiling (y = +boxSize)
-    {
-      const shape = new CANNON.Plane();
-      const body = new CANNON.Body({ mass: 0 });
-      body.addShape(shape);
-      body.quaternion.setFromEuler(Math.PI/2, 0, 0);
-      body.position.set(0, boxSize, 0);
-      world.addBody(body);
-      walls.push(body);
-    }
-    // Left wall (x = –boxSize)
-    {
-      const shape = new CANNON.Plane();
-      const body = new CANNON.Body({ mass: 0 });
-      body.addShape(shape);
-      body.quaternion.setFromEuler(0, Math.PI/2, 0);
-      body.position.set(-boxSize, 0, 0);
-      world.addBody(body);
-      walls.push(body);
-    }
-    // Right wall (x = +boxSize)
-    {
-      const shape = new CANNON.Plane();
-      const body = new CANNON.Body({ mass: 0 });
-      body.addShape(shape);
-      body.quaternion.setFromEuler(0, -Math.PI/2, 0);
-      body.position.set(boxSize, 0, 0);
-      world.addBody(body);
-      walls.push(body);
-    }
-    // Back wall (z = –boxSize)
-    {
-      const shape = new CANNON.Plane();
-      const body = new CANNON.Body({ mass: 0 });
-      body.addShape(shape);
-      // Rotate so the plane faces inward
-      body.quaternion.setFromEuler(0, Math.PI, 0);
-      body.position.set(0, 0, -boxSize);
-      world.addBody(body);
-      walls.push(body);
-    }
-    // Front wall (z = +boxSize)
-    {
-      const shape = new CANNON.Plane();
-      const body = new CANNON.Body({ mass: 0 });
-      body.addShape(shape);
-      // Rotate so the plane faces inward
-      body.quaternion.setFromEuler(0, 0, 0);
-      body.position.set(0, 0, boxSize);
-      world.addBody(body);
-      walls.push(body);
-    }
+    const bSize = params.boxSize;
+    // Floor (y = -bSize)
+    createWall(-Math.PI/2, 0, 0, 0, -bSize, 0);
+    // Ceiling (y = +bSize)
+    createWall(Math.PI/2, 0, 0, 0, bSize, 0);
+    // Left wall (x = -bSize)
+    createWall(0, Math.PI/2, 0, -bSize, 0, 0);
+    // Right wall (x = +bSize)
+    createWall(0, -Math.PI/2, 0, bSize, 0, 0);
+    // Back wall (z = -bSize)
+    createWall(0, Math.PI, 0, 0, 0, -bSize);
+    // Front wall (z = +bSize)
+    createWall(0, 0, 0, 0, 0, bSize);
 
     /******************************
      * CREATE THE TERRAIN PARTICLES *
      ******************************/
-    // Arrays to store Cannon bodies and Three.js meshes
     const particles = [];
     const particleMeshes = [];
 
-    // We create particles arranged roughly on a grid over the x–z plane.
+    // Calculate grid dimensions so that particles fill the terrain area.
     const gridX = Math.ceil(Math.sqrt(params.particleCount * (params.terrainWidth / params.terrainDepth)));
     const gridZ = Math.ceil(params.particleCount / gridX);
     const dx = params.terrainWidth / gridX;
@@ -185,44 +145,43 @@
     const offsetX = -params.terrainWidth / 2;
     const offsetZ = -params.terrainDepth / 2;
 
-    // A simple terrain function: using sine and cosine for variation.
+    // Define a simple terrain function using sine and cosine.
     function terrainHeight(x, z) {
       return Math.sin(x * 0.5) * Math.cos(z * 0.5) * params.heightScale;
     }
 
-    // First, sample the grid to find the minimum and maximum height values.
-    let minHeight = Infinity;
-    let maxHeight = -Infinity;
+    // Determine min and max heights for proper color mapping.
+    let minHeight = Infinity, maxHeight = -Infinity;
     for (let i = 0; i < gridX; i++) {
       for (let j = 0; j < gridZ; j++) {
         const x = offsetX + i * dx;
         const z = offsetZ + j * dz;
         const h = terrainHeight(x, z);
-        if (h < minHeight) minHeight = h;
-        if (h > maxHeight) maxHeight = h;
+        minHeight = Math.min(minHeight, h);
+        maxHeight = Math.max(maxHeight, h);
       }
     }
 
-    // Map a height value to a color (blue for low, red for high)
+    // Function to map height to a color (blue for low, red for high).
     function heightToColor(h) {
       const t = (h - minHeight) / (maxHeight - minHeight);
-      // Linear interpolation: blue (0,0,255) to red (255,0,0)
       const r = t * 255;
       const b = (1 - t) * 255;
-      return new THREE.Color(r/255, 0, b/255);
+      return new THREE.Color(r / 255, 0, b / 255);
     }
 
-    // Create particles and add both physics bodies and visual meshes.
+    // Create particle bodies and meshes.
     let particleIndex = 0;
     for (let i = 0; i < gridX; i++) {
       for (let j = 0; j < gridZ; j++) {
         if (particleIndex >= params.particleCount) break;
-        // Compute x and z positions with some random jitter for natural variation.
+
+        // Compute x and z positions with a slight random jitter.
         const x = offsetX + i * dx + (Math.random() - 0.5) * dx * 0.5;
         const z = offsetZ + j * dz + (Math.random() - 0.5) * dz * 0.5;
         const y = terrainHeight(x, z);
 
-        // Create the Three.js mesh for the particle.
+        // Create Three.js sphere mesh.
         const geometry = new THREE.SphereGeometry(params.particleSize, 8, 8);
         const material = new THREE.MeshPhongMaterial({ color: heightToColor(y) });
         const mesh = new THREE.Mesh(geometry, material);
@@ -230,12 +189,11 @@
         scene.add(mesh);
         particleMeshes.push(mesh);
 
-        // Create the Cannon‑ES body for the particle.
+        // Create Cannon‑ES physics body.
         const shape = new CANNON.Sphere(params.particleSize);
         const body = new CANNON.Body({ mass: 1 });
         body.addShape(shape);
         body.position.set(x, y, z);
-        // (Optional: add initial velocities or damping here if desired)
         world.addBody(body);
         particles.push(body);
 
@@ -255,12 +213,10 @@
       // Step the physics simulation.
       world.step(params.physicsTimeStep, delta);
 
-      // Sync each Three.js mesh with its corresponding Cannon body.
+      // Update each Three.js mesh with its corresponding Cannon‑ES body.
       for (let i = 0; i < particles.length; i++) {
-        const body = particles[i];
-        const mesh = particleMeshes[i];
-        mesh.position.copy(body.position);
-        mesh.quaternion.copy(body.quaternion);
+        particleMeshes[i].position.copy(particles[i].position);
+        particleMeshes[i].quaternion.copy(particles[i].quaternion);
       }
 
       controls.update();
@@ -271,12 +227,11 @@
     /************************
      * WINDOW RESIZE HANDLER *
      ************************/
-    window.addEventListener('resize', onWindowResize, false);
-    function onWindowResize() {
+    window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
-    }
+    });
   </script>
 </body>
 </html>
