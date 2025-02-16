@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Interactive Terrain Elevation Map with Particles</title>
+  <title>Interactive Terrain Elevation Map with Particles (Debug)</title>
   <style>
     body { margin: 0; overflow: hidden; }
     /* Legend for the color scale */
@@ -40,7 +40,6 @@
 
   <!-- Import Three.js, OrbitControls, and Cannon‑ES via CDN -->
   <script type="module">
-    // Import modules from CDN
     import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
     import { OrbitControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js';
     import * as CANNON from 'https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js';
@@ -49,20 +48,14 @@
      * PARAMETERS & CONFIG *
      ***********************/
     const params = {
-      // Total number of particles
       particleCount: 1000,
-      // Radius of each particle (spherical)
       particleSize: 0.2,
-      // Terrain area dimensions (particles spread over this x–z area)
       terrainWidth: 20,
       terrainDepth: 20,
-      // Scale factor for height variations in the terrain function
       heightScale: 5,
-      // Physics simulation time step
       physicsTimeStep: 1 / 60,
-      // Gravity along Y axis (set to 0 for debugging)
-      gravity: -9.82,
-      // Half–size of the containing box (the box spans -boxSize to +boxSize in each axis)
+      // Set gravity to zero for debugging so particles don't fall.
+      gravity: 0,
       boxSize: 25
     };
 
@@ -72,27 +65,30 @@
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x222222);
 
-    // Set up camera with a perspective view.
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.position.set(30, 30, 30);
-    camera.lookAt(scene.position);
+    // Adjust camera to get a better view.
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    // Place the camera further back and slightly higher.
+    camera.position.set(0, 40, 50);
+    camera.lookAt(new THREE.Vector3(0, 0, 0));
 
-    // Create renderer and add it to the DOM.
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // Add orbit controls for interactivity.
     const controls = new OrbitControls(camera, renderer.domElement);
 
-    // Basic ambient and directional lighting.
+    // Add some basic lights.
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
     directionalLight.position.set(10, 20, 10);
     scene.add(directionalLight);
 
-    // Create a wireframe box to represent the containment area.
-    const boxGeometry = new THREE.BoxGeometry(params.boxSize*2, params.boxSize*2, params.boxSize*2);
+    // Add an axes helper so you can see coordinate directions.
+    const axesHelper = new THREE.AxesHelper(30);
+    scene.add(axesHelper);
+
+    // Create a wireframe box to show the boundaries.
+    const boxGeometry = new THREE.BoxGeometry(params.boxSize * 2, params.boxSize * 2, params.boxSize * 2);
     const boxEdges = new THREE.EdgesGeometry(boxGeometry);
     const boxMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
     const boxWireframe = new THREE.LineSegments(boxEdges, boxMaterial);
@@ -102,12 +98,11 @@
      * CANNON‑ES PHYSICS   *
      ***********************/
     const world = new CANNON.World();
-    // Set gravity along Y axis.
     world.gravity.set(0, params.gravity, 0);
     world.broadphase = new CANNON.NaiveBroadphase();
     world.solver.iterations = 10;
 
-    // Helper function to create a static wall.
+    // Helper to create static walls.
     function createWall(eulerX, eulerY, eulerZ, posX, posY, posZ) {
       const shape = new CANNON.Plane();
       const body = new CANNON.Body({ mass: 0 });
@@ -116,20 +111,13 @@
       body.position.set(posX, posY, posZ);
       world.addBody(body);
     }
-
     const bSize = params.boxSize;
-    // Floor (y = -bSize)
-    createWall(-Math.PI/2, 0, 0, 0, -bSize, 0);
-    // Ceiling (y = +bSize)
-    createWall(Math.PI/2, 0, 0, 0, bSize, 0);
-    // Left wall (x = -bSize)
-    createWall(0, Math.PI/2, 0, -bSize, 0, 0);
-    // Right wall (x = +bSize)
-    createWall(0, -Math.PI/2, 0, bSize, 0, 0);
-    // Back wall (z = -bSize)
-    createWall(0, Math.PI, 0, 0, 0, -bSize);
-    // Front wall (z = +bSize)
-    createWall(0, 0, 0, 0, 0, bSize);
+    createWall(-Math.PI / 2, 0, 0, 0, -bSize, 0);    // Floor
+    createWall(Math.PI / 2, 0, 0, 0, bSize, 0);       // Ceiling
+    createWall(0, Math.PI / 2, 0, -bSize, 0, 0);       // Left wall
+    createWall(0, -Math.PI / 2, 0, bSize, 0, 0);       // Right wall
+    createWall(0, Math.PI, 0, 0, 0, -bSize);           // Back wall
+    createWall(0, 0, 0, 0, 0, bSize);                  // Front wall
 
     /******************************
      * CREATE THE TERRAIN PARTICLES *
@@ -137,7 +125,7 @@
     const particles = [];
     const particleMeshes = [];
 
-    // Calculate grid dimensions so that particles fill the terrain area.
+    // Determine grid dimensions.
     const gridX = Math.ceil(Math.sqrt(params.particleCount * (params.terrainWidth / params.terrainDepth)));
     const gridZ = Math.ceil(params.particleCount / gridX);
     const dx = params.terrainWidth / gridX;
@@ -145,12 +133,12 @@
     const offsetX = -params.terrainWidth / 2;
     const offsetZ = -params.terrainDepth / 2;
 
-    // Define a simple terrain function using sine and cosine.
+    // A simple terrain function.
     function terrainHeight(x, z) {
       return Math.sin(x * 0.5) * Math.cos(z * 0.5) * params.heightScale;
     }
 
-    // Determine min and max heights for proper color mapping.
+    // Find min and max heights.
     let minHeight = Infinity, maxHeight = -Infinity;
     for (let i = 0; i < gridX; i++) {
       for (let j = 0; j < gridZ; j++) {
@@ -162,7 +150,7 @@
       }
     }
 
-    // Function to map height to a color (blue for low, red for high).
+    // Map height to a color (blue to red).
     function heightToColor(h) {
       const t = (h - minHeight) / (maxHeight - minHeight);
       const r = t * 255;
@@ -170,18 +158,16 @@
       return new THREE.Color(r / 255, 0, b / 255);
     }
 
-    // Create particle bodies and meshes.
+    // Create particles.
     let particleIndex = 0;
     for (let i = 0; i < gridX; i++) {
       for (let j = 0; j < gridZ; j++) {
         if (particleIndex >= params.particleCount) break;
-
-        // Compute x and z positions with a slight random jitter.
         const x = offsetX + i * dx + (Math.random() - 0.5) * dx * 0.5;
         const z = offsetZ + j * dz + (Math.random() - 0.5) * dz * 0.5;
         const y = terrainHeight(x, z);
 
-        // Create Three.js sphere mesh.
+        // Create Three.js mesh.
         const geometry = new THREE.SphereGeometry(params.particleSize, 8, 8);
         const material = new THREE.MeshPhongMaterial({ color: heightToColor(y) });
         const mesh = new THREE.Mesh(geometry, material);
@@ -189,7 +175,7 @@
         scene.add(mesh);
         particleMeshes.push(mesh);
 
-        // Create Cannon‑ES physics body.
+        // Create Cannon‑ES body.
         const shape = new CANNON.Sphere(params.particleSize);
         const body = new CANNON.Body({ mass: 1 });
         body.addShape(shape);
@@ -210,10 +196,10 @@
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
 
-      // Step the physics simulation.
+      // Step physics simulation.
       world.step(params.physicsTimeStep, delta);
 
-      // Update each Three.js mesh with its corresponding Cannon‑ES body.
+      // Update meshes from physics bodies.
       for (let i = 0; i < particles.length; i++) {
         particleMeshes[i].position.copy(particles[i].position);
         particleMeshes[i].quaternion.copy(particles[i].quaternion);
@@ -224,9 +210,6 @@
     }
     animate();
 
-    /************************
-     * WINDOW RESIZE HANDLER *
-     ************************/
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
