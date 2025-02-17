@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Interactive Terrain Elevation</title>
+  <title>Particle Terrain Elevation Map</title>
   <style>
-    body { margin: 0; overflow: hidden; }
+    body { margin: 0; overflow: hidden; background: #222; }
     /* Legend for the color scale */
     #legend {
       position: absolute;
@@ -13,7 +13,7 @@
       width: 20px;
       height: 200px;
       background: linear-gradient(to top, blue, red);
-      border: 1px solid #000;
+      border: 1px solid #fff;
     }
     #legendLabels {
       position: absolute;
@@ -26,7 +26,7 @@
       color: #fff;
       font-family: sans-serif;
       font-size: 14px;
-      text-shadow: 1px 1px 2px #000;
+      pointer-events: none;
     }
   </style>
 </head>
@@ -34,28 +34,34 @@
   <!-- Color scale legend -->
   <div id="legend"></div>
   <div id="legendLabels">
-    <div id="minLabel">Low</div>
-    <div id="maxLabel">High</div>
+    <div>Low</div>
+    <div>High</div>
   </div>
 
-  <!-- Import Three.js, OrbitControls, and Cannon‑ES via CDN -->
+  <!-- Script using ES modules -->
   <script type="module">
-    import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
-    import { OrbitControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js';
-    import * as CANNON from 'https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js';
+    import * as THREE from "https://unpkg.com/three@0.152.2/build/three.module.js";
+    import { OrbitControls } from "https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js";
+    import * as CANNON from "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js";
 
     /***********************
      * PARAMETERS & CONFIG *
      ***********************/
     const params = {
-      particleCount: 1000,
-      particleSize: 0.2,
-      terrainWidth: 20,
-      terrainDepth: 20,
+      // Total number of particles to create
+      particleCount: 2500,
+      // Visual size of each particle (PointsMaterial size)
+      particleSize: 0.3,
+      // Dimensions (width & depth) of the terrain grid (in world units)
+      terrainWidth: 30,
+      terrainDepth: 30,
+      // Scale factor for the terrain height variation
       heightScale: 5,
+      // Physics simulation time step (seconds)
       physicsTimeStep: 1 / 60,
-      // Set gravity to zero for debugging so particles don't fall.
+      // Gravity – set to zero so particles stay in place (physics enabled)
       gravity: 0,
+      // Half–size of the containing box (for visualization)
       boxSize: 25
     };
 
@@ -65,10 +71,8 @@
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x222222);
 
-    // Adjust camera to get a better view.
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    // Place the camera further back and slightly higher.
-    camera.position.set(0, 40, 50);
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(40, 40, 40);
     camera.lookAt(new THREE.Vector3(0, 0, 0));
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -76,23 +80,112 @@
     document.body.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
 
-    // Add some basic lights.
+    // Add lights
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(10, 20, 10);
-    scene.add(directionalLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    scene.add(dirLight);
 
-    // Add an axes helper so you can see coordinate directions.
-    const axesHelper = new THREE.AxesHelper(30);
-    scene.add(axesHelper);
-
-    // Create a wireframe box to show the boundaries.
-    const boxGeometry = new THREE.BoxGeometry(params.boxSize * 2, params.boxSize * 2, params.boxSize * 2);
-    const boxEdges = new THREE.EdgesGeometry(boxGeometry);
+    // Add a wireframe box for visual boundaries
+    const boxGeom = new THREE.BoxGeometry(params.boxSize * 2, params.boxSize * 2, params.boxSize * 2);
+    const boxEdges = new THREE.EdgesGeometry(boxGeom);
     const boxMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
     const boxWireframe = new THREE.LineSegments(boxEdges, boxMaterial);
     scene.add(boxWireframe);
+
+    /*****************************
+     * CREATE THE PARTICLE SYSTEM *
+     *****************************/
+    // We will use a BufferGeometry with attributes for positions and colors.
+    const positions = new Float32Array(params.particleCount * 3);
+    const colors = new Float32Array(params.particleCount * 3);
+
+    // For physics, we keep an array of Cannon bodies (one per particle).
+    const bodies = [];
+
+    // Compute grid dimensions to fill the terrain area.
+    const gridCount = Math.ceil(Math.sqrt(params.particleCount));
+    const dx = params.terrainWidth / gridCount;
+    const dz = params.terrainDepth / gridCount;
+    const offsetX = -params.terrainWidth / 2;
+    const offsetZ = -params.terrainDepth / 2;
+
+    // A simple terrain function that returns height for a given (x, z)
+    function terrainHeight(x, z) {
+      return Math.sin(x * 0.5) * Math.cos(z * 0.5) * params.heightScale;
+    }
+
+    // First, sample grid points to compute min and max heights (for color mapping).
+    let minHeight = Infinity, maxHeight = -Infinity;
+    const tempHeights = [];
+    for (let i = 0; i < gridCount; i++) {
+      for (let j = 0; j < gridCount; j++) {
+        const x = offsetX + i * dx;
+        const z = offsetZ + j * dz;
+        const h = terrainHeight(x, z);
+        tempHeights.push(h);
+        if (h < minHeight) minHeight = h;
+        if (h > maxHeight) maxHeight = h;
+      }
+    }
+
+    // Function to map height to a color between blue (low) and red (high)
+    function heightToColor(h) {
+      const t = (h - minHeight) / (maxHeight - minHeight);
+      const r = t, g = 0, b = 1 - t;
+      return new THREE.Color(r, g, b);
+    }
+
+    // Create particles using grid sampling.
+    let particleIndex = 0;
+    for (let i = 0; i < gridCount; i++) {
+      for (let j = 0; j < gridCount; j++) {
+        if (particleIndex >= params.particleCount) break;
+        // Compute x, z position with a slight random jitter
+        const x = offsetX + i * dx + (Math.random() - 0.5) * dx * 0.3;
+        const z = offsetZ + j * dz + (Math.random() - 0.5) * dz * 0.3;
+        const y = terrainHeight(x, z);
+
+        // Set position in the positions array
+        positions[particleIndex * 3 + 0] = x;
+        positions[particleIndex * 3 + 1] = y;
+        positions[particleIndex * 3 + 2] = z;
+
+        // Determine color based on height
+        const color = heightToColor(y);
+        colors[particleIndex * 3 + 0] = color.r;
+        colors[particleIndex * 3 + 1] = color.g;
+        colors[particleIndex * 3 + 2] = color.b;
+
+        // Create a corresponding physics body for this particle.
+        // We use a small sphere shape.
+        const shape = new CANNON.Sphere(params.particleSize);
+        const body = new CANNON.Body({ mass: 1 });
+        body.addShape(shape);
+        body.position.set(x, y, z);
+        bodies.push(body);
+
+        particleIndex++;
+      }
+      if (particleIndex >= params.particleCount) break;
+    }
+
+    // Create the BufferGeometry for the Points.
+    const particleGeometry = new THREE.BufferGeometry();
+    particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    particleGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    // Create PointsMaterial that uses the vertex colors.
+    const particleMaterial = new THREE.PointsMaterial({
+      size: params.particleSize * 2.5,
+      vertexColors: true,
+      sizeAttenuation: true
+    });
+
+    const particlesMesh = new THREE.Points(particleGeometry, particleMaterial);
+    scene.add(particlesMesh);
 
     /***********************
      * CANNON‑ES PHYSICS   *
@@ -102,91 +195,8 @@
     world.broadphase = new CANNON.NaiveBroadphase();
     world.solver.iterations = 10;
 
-    // Helper to create static walls.
-    function createWall(eulerX, eulerY, eulerZ, posX, posY, posZ) {
-      const shape = new CANNON.Plane();
-      const body = new CANNON.Body({ mass: 0 });
-      body.addShape(shape);
-      body.quaternion.setFromEuler(eulerX, eulerY, eulerZ);
-      body.position.set(posX, posY, posZ);
-      world.addBody(body);
-    }
-    const bSize = params.boxSize;
-    createWall(-Math.PI / 2, 0, 0, 0, -bSize, 0);    // Floor
-    createWall(Math.PI / 2, 0, 0, 0, bSize, 0);       // Ceiling
-    createWall(0, Math.PI / 2, 0, -bSize, 0, 0);       // Left wall
-    createWall(0, -Math.PI / 2, 0, bSize, 0, 0);       // Right wall
-    createWall(0, Math.PI, 0, 0, 0, -bSize);           // Back wall
-    createWall(0, 0, 0, 0, 0, bSize);                  // Front wall
-
-    /******************************
-     * CREATE THE TERRAIN PARTICLES *
-     ******************************/
-    const particles = [];
-    const particleMeshes = [];
-
-    // Determine grid dimensions.
-    const gridX = Math.ceil(Math.sqrt(params.particleCount * (params.terrainWidth / params.terrainDepth)));
-    const gridZ = Math.ceil(params.particleCount / gridX);
-    const dx = params.terrainWidth / gridX;
-    const dz = params.terrainDepth / gridZ;
-    const offsetX = -params.terrainWidth / 2;
-    const offsetZ = -params.terrainDepth / 2;
-
-    // A simple terrain function.
-    function terrainHeight(x, z) {
-      return Math.sin(x * 0.5) * Math.cos(z * 0.5) * params.heightScale;
-    }
-
-    // Find min and max heights.
-    let minHeight = Infinity, maxHeight = -Infinity;
-    for (let i = 0; i < gridX; i++) {
-      for (let j = 0; j < gridZ; j++) {
-        const x = offsetX + i * dx;
-        const z = offsetZ + j * dz;
-        const h = terrainHeight(x, z);
-        minHeight = Math.min(minHeight, h);
-        maxHeight = Math.max(maxHeight, h);
-      }
-    }
-
-    // Map height to a color (blue to red).
-    function heightToColor(h) {
-      const t = (h - minHeight) / (maxHeight - minHeight);
-      const r = t * 255;
-      const b = (1 - t) * 255;
-      return new THREE.Color(r / 255, 0, b / 255);
-    }
-
-    // Create particles.
-    let particleIndex = 0;
-    for (let i = 0; i < gridX; i++) {
-      for (let j = 0; j < gridZ; j++) {
-        if (particleIndex >= params.particleCount) break;
-        const x = offsetX + i * dx + (Math.random() - 0.5) * dx * 0.5;
-        const z = offsetZ + j * dz + (Math.random() - 0.5) * dz * 0.5;
-        const y = terrainHeight(x, z);
-
-        // Create Three.js mesh.
-        const geometry = new THREE.SphereGeometry(params.particleSize, 8, 8);
-        const material = new THREE.MeshPhongMaterial({ color: heightToColor(y) });
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.set(x, y, z);
-        scene.add(mesh);
-        particleMeshes.push(mesh);
-
-        // Create Cannon‑ES body.
-        const shape = new CANNON.Sphere(params.particleSize);
-        const body = new CANNON.Body({ mass: 1 });
-        body.addShape(shape);
-        body.position.set(x, y, z);
-        world.addBody(body);
-        particles.push(body);
-
-        particleIndex++;
-      }
-      if (particleIndex >= params.particleCount) break;
-    }
+    // For simplicity we add all particle bodies to the physics world.
+    bodies.forEach(body => world.addBody(body));
 
     /********************
      * ANIMATION LOOP   *
@@ -196,14 +206,18 @@
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
 
-      // Step physics simulation.
+      // Step the physics world.
       world.step(params.physicsTimeStep, delta);
 
-      // Update meshes from physics bodies.
-      for (let i = 0; i < particles.length; i++) {
-        particleMeshes[i].position.copy(particles[i].position);
-        particleMeshes[i].quaternion.copy(particles[i].quaternion);
+      // Update the positions in the buffer geometry from the physics bodies.
+      const positionsArray = particleGeometry.attributes.position.array;
+      for (let i = 0; i < bodies.length; i++) {
+        const pos = bodies[i].position;
+        positionsArray[i * 3 + 0] = pos.x;
+        positionsArray[i * 3 + 1] = pos.y;
+        positionsArray[i * 3 + 2] = pos.z;
       }
+      particleGeometry.attributes.position.needsUpdate = true;
 
       controls.update();
       renderer.render(scene, camera);
